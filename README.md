@@ -25,6 +25,9 @@ Organoid_analyzer_Zstack.py
 <img width="572" alt="example" src="https://github.com/user-attachments/assets/739217d5-60bf-459b-a548-64d1ed42c316" />
 <img width="572" alt="example2" src="https://github.com/user-attachments/assets/4d8a9ec4-f1f7-4bad-9ebe-16ba7b83b074" />
 
+Updated tool to include organoid circularity on 5/26/26! Also note the model on huggingface was improved. This model is based on the base nvidia-b3 segformer, so it will only work with
+the newest SMORE.
+
 # Installation:
 Have Python3, and the following libraries: Numpy, Pandas, Tkinter, Opencv, Transformers, PIL, matplotlib. NVIDIA's CUDA is recommended for performance but not strictly necessary for usage. We recommend you use a conda environment to avoid conflicts with other projects.
 Download the three python files above and the model itself (place the model.safetensors, config.json, and training_args.bin files in one folder with the model name).
