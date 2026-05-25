@@ -116,7 +116,7 @@ def visualize_segmentation(mask, image=0):
 
 # Load image processor
 from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
-image_processor = SegformerImageProcessor.from_pretrained("nvidia/segformer-b3-finetuned-cityscapes-1024-1024")
+image_processor = SegformerImageProcessor.from_pretrained("nvidia/mit-b3")
 
 def preprocess_image(image_path):
     image = Image.open(image_path).convert("RGB")  # Open and convert to RGB
@@ -428,6 +428,8 @@ def main(args):
         else:
             cv2.putText(img, str(colonies.index[i]), coords, cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 0), 2)
     del nearby, areas
+    colonies["circularity"]=[4*np.pi/((cv2.arcLength(cnt, True))**2) for cnt in list(colonies['contour'])]
+    colonies["circularity"]=colonies["circularity"]*colonies["organoid_area"]
     colonies = colonies.drop('contour', axis=1)
     colonies = colonies.drop('nec_contours', axis=1)
     colonies = colonies.drop('exclude', axis=1)
@@ -442,8 +444,9 @@ def main(args):
     colonies['organoid_volume'] = volumes
     del radii, volumes
     meanpix = sum(colonies['mean_pixel_value'] * colonies['organoid_area'])/total_area_light
-    colonies = colonies[["organoid_number", 'organoid_volume', "organoid_area",'mean_pixel_value', "centroid", "necrotic_area","percent_necrotic", "source"]]
-    colonies.loc[len(colonies)+1] = ["Total", sum(colonies['organoid_volume']), total_area_light, meanpix, None, total_area_dark, ratio, None]
+    colonies = colonies[["organoid_number", 'organoid_volume', "organoid_area",'mean_pixel_value', "centroid", "necrotic_area","percent_necrotic", "circularity","source"]]
+    
+    colonies.loc[len(colonies)+1] = ["Total", sum(colonies['organoid_volume']), total_area_light, meanpix, None, total_area_dark, ratio, colonies["circularity"].mean(),None]
     del meanpix
     Parameters = pd.DataFrame({"Minimum organoid size in pixels":[min_size], "Minimum organoid circularity":[min_circ]})
     if do_necrosis == False:

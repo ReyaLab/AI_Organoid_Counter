@@ -116,7 +116,7 @@ def visualize_segmentation(mask, image=0):
 
 # Load image processor
 from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
-image_processor = SegformerImageProcessor.from_pretrained("nvidia/segformer-b3-finetuned-cityscapes-1024-1024")
+image_processor = SegformerImageProcessor.from_pretrained("nvidia/mit-b3")
 
 def preprocess_image(image_path):
     image = Image.open(image_path).convert("RGB")  # Open and convert to RGB
@@ -305,6 +305,8 @@ def main(args):
             coords[0] = 1950
         cv2.putText(img, str(colonies.index[i]), tuple(coords), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 0), 2)
     img = cv2.copyMakeBorder(img,top=10, bottom=0,left=10,right=0, borderType=cv2.BORDER_CONSTANT,  value=[255, 255, 255]) 
+    colonies["circularity"]=[4*np.pi/((cv2.arcLength(cnt, True))**2) for cnt in list(colonies['contour'])]
+    colonies["circularity"]=colonies["circularity"]*colonies["organoid_area"]
     colonies = colonies.drop('contour', axis=1)
     colonies = colonies.drop('nec_contours', axis=1)
     
@@ -317,9 +319,19 @@ def main(args):
     colonies['organoid_volume'] = volumes
     del radii, volumes
     meanpix = sum(colonies['mean_pixel_value'] * colonies['organoid_area'])/total_area_light
-    colonies.loc[len(colonies)+1] = ["Total", total_area_light, total_area_dark, None, ratio,meanpix, sum(colonies['organoid_volume'])]
+    #colonies.loc[len(colonies)+1] = ["Total", total_area_light, total_area_dark, None, ratio,meanpix, sum(colonies['organoid_volume'])]
+    colonies.loc[len(colonies)+1] = {
+    "organoid_number": "Total",
+    "organoid_volume": sum(colonies["organoid_volume"]),
+    "organoid_area": total_area_light,
+    "mean_pixel_value": meanpix,
+    "centroid": None,
+    "necrotic_area": total_area_dark,
+    "percent_necrotic": ratio,
+    "circularity": colonies["circularity"].mean()
+    }
     del meanpix
-    colonies = colonies[["organoid_number", 'organoid_volume', "organoid_area",'mean_pixel_value', "centroid", "necrotic_area","percent_necrotic"]]
+    colonies = colonies[["organoid_number", 'organoid_volume', "organoid_area",'mean_pixel_value', "centroid", "circularity", "necrotic_area","percent_necrotic"]]
     if do_necrosis == False:
         colonies = colonies.drop('necrotic_area', axis=1)
         colonies = colonies.drop('percent_necrotic', axis=1)
