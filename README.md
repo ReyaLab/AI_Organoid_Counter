@@ -6,7 +6,7 @@ Test the web app on our [Huggingface Space!](https://huggingface.co/spaces/ReyaL
 Note: The program works the same way as a web app, but the installable program here should run faster, is capable of analyzing entire groups of folders at the click of a button, and you can select any model. Therefore, we recommend installing this github program for heavy use.
 
 Fine-tuned on custom data from the following segmentation NN:
-https://huggingface.co/nvidia/segformer-b3-finetuned-cityscapes-1024-1024
+https://huggingface.co/nvidia/mit-b3
 
 https://github.com/NVlabs/SegFormer?tab=readme-ov-file
 
