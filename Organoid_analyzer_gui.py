@@ -13,6 +13,27 @@ This is the Tkinter GUI for Mari's image analysis program
 import tkinter as tk
 import os
 import sys
+def find_tiff_files(path):
+    """
+    Recursively returns full paths to all .tif and .tiff files under 'path',
+    excluding generated result files and temporary tile files.
+    """
+    final = []
+    try:
+        entries = sorted(os.listdir(path))
+    except Exception as e:
+        print(f"Could not access {path}: {e}")
+        return final
+
+    for entry in entries:
+        full = os.path.join(path, entry)
+        if os.path.isdir(full):
+            final += find_tiff_files(full)
+        elif os.path.isfile(full):
+            name = entry.lower()
+            if (name.endswith('.tif') or name.endswith('.tiff')) and ('result' not in name) and ('_part' not in name):
+                final.append(full)
+    return final
 
 def find_models(path):
     """
@@ -293,33 +314,45 @@ def run_analysis(filn, path, filelist = [], params = [0,0, False, ""], do_all = 
     sys.path.append(script_path)
     label_hidden.config(text="Initiated analysis.")
     if multiple_folders == True:
-    	directories = find_directories(path)
-    	if len(directories) < 1:
-            label_hidden.config(text="No folders with tif files detected.")
-    	else:
-            label_hidden.config(text='Detected the following folders:\n'+'\n'.join(directories))
-            count = 0
-            results = None
-            for x in directories:
-                if x[-1] != '/':
-                    x = x+ '/'
-                file_list = os.listdir(x)
-                file_list = [x for x in file_list if (((x[-4::]==".tif") or (x[-5::]==".tiff") or (x[-4::]==".png") or (x[-4::]==".jpg") or (x[-5::]==".jpeg")) and ('result' not in x))]
-                try:
-                    result = run_analysis(filn, x, file_list, params, True, False)
-                    count+=1
-                    label_hidden.config(text="Finished "+str(count) + ' out of ' + str(len(directories)) + ' folders.')
-                    if results is None:
-            	        results = result
-                    else:
-            	        results = pd.concat([results, result])
-                except Exception as e:
-                    print(f"Error analyzing {x}: {e}")
-            Parameters = pd.DataFrame({"Minimum organoid size in pixels":[params[0]], "Minimum organoid circularity":[params[1]], 'Model':[params[3]]})
-            with pd.ExcelWriter(path+'summary.xlsx') as writer:
-                results.to_excel(writer, sheet_name="Organoid data", index=False)
-                Parameters.to_excel(writer, sheet_name="Parameters", index=False)
-    	return(0)         
+        all_files = find_tiff_files(path)
+    
+        if len(all_files) < 1:
+            label_hidden.config(text="No tif files detected.")
+            return 0
+    
+        label_hidden.config(text='Detected the following tif files:\n' + '\n'.join(all_files[:20]))
+        results = None
+    
+        for count, fullpath in enumerate(all_files, start=1):
+            folder = os.path.dirname(fullpath)
+            if folder[-1] != '/':
+                folder = folder + '/'
+            fname = os.path.basename(fullpath)
+    
+            try:
+                result = run_analysis(fname, folder, [fname], params, True, False)
+                label_hidden.config(text=f"Finished {count} out of {len(all_files)} files.")
+                root.update()
+    
+                if results is None:
+                    results = result
+                else:
+                    results = pd.concat([results, result])
+    
+            except Exception as e:
+                print(f"Error analyzing {fullpath}: {e}")
+    
+        Parameters = pd.DataFrame({
+            "Minimum organoid size in pixels": [params[0]],
+            "Minimum organoid circularity": [params[1]],
+            "Model": [params[3]]
+        })
+    
+        with pd.ExcelWriter(path + 'summary.xlsx') as writer:
+            results.to_excel(writer, sheet_name="Organoid data", index=False)
+            Parameters.to_excel(writer, sheet_name="Parameters", index=False)
+    
+        return 0       
             
     if do_all == False:
         import Organoid_analyzer_AI as MA
