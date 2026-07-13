@@ -30,6 +30,10 @@ the newest SMORE.
 
 # Installation:
 Have Python3, and the following libraries: Numpy, Pandas, Tkinter, Opencv, Transformers, PIL, matplotlib. NVIDIA's CUDA is recommended for performance but not strictly necessary for usage. We recommend you use a conda environment to avoid conflicts with other projects.
+
+You can install the python packages with the following code:
+pip install numpy pandas opencv-python transformers pillow matplotlib
+
 Download the three python files above and the model itself (place the model.safetensors, config.json, and training_args.bin files in one folder with the model name).
 
 https://huggingface.co/ReyaLabColumbia/Segformer_Organoid_Counter_GP
