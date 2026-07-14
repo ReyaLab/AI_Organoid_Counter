@@ -9,7 +9,38 @@ Created on Thu Mar 20 14:23:27 2025
 from PIL import Image
 import numpy as np
 import os
+import pandas as pd
 import cv2
+
+def build_organoid_column_descriptions(outside=False):
+    temp= pd.DataFrame({
+        "Column": [
+            "organoid_number",
+            "organoid_volume",
+            "organoid_area",
+            "mean_pixel_value",
+            "centroid",
+            "circularity",
+            "necrotic_area",
+            "percent_necrotic",
+            "outside_necrotic_area"
+        ],
+        "Meaning": [
+            "numbering of organoid (largest to smallest)",
+            "total volume (estimated with sphere formula) of this organoid",
+            "total pixel area of this organoid",
+            "mean pixel value (brightness, 0 is dark, 255 is light) of this organoid",
+            "coordinates of centroid from top left of image",
+            "circularity of this organoid, (4*pi*area)/(perimeter^2)",
+            "total area in pixels of necrosis within this organoid",
+            "necrotic area / organoid_area for this organoid",
+            "total area in pixels of necrotic regions outside organoids, in this file (not calculated on per-organoid basis)"
+        ]
+    })
+    if outside==True:
+        return(temp)
+    else:
+        return(temp.head(8))
 
 def pad(img_np, tw=2048, th=1536):
     """
@@ -38,7 +69,7 @@ def pad(img_np, tw=2048, th=1536):
     
 def cut_img(path, x, patch_size=512):
     img_map = {}
-    img = Image.fromarray(pad(cv2.imread(path + x)))
+    img = Image.fromarray(pad(cv2.imread(os.path.join(path, x))))
     name = x.split(".")[0]
     width, height = img.size
     i_num = height // patch_size
@@ -183,7 +214,6 @@ def find_necrosis(mask):
 # contours =  find_necrosis(p)
 # cv2.drawContours(contour_image, contours, -1, (255), 2)
 # visualize_segmentation(contour_image)
-import pandas as pd
 def compute_centroid(contour):
     M = cv2.moments(contour)
     if M["m00"] == 0:  # Avoid division by zero
@@ -211,25 +241,25 @@ def contours_overlap_using_mask(contour1, contour2, image_shape=(1536, 2048)):
     
     return np.any(overlap)
 
-def analyze_colonies(mask, size_cutoff, circ_cutoff, img):
+def analyze_colonies(mask, size_cutoff, circ_cutoff, img, find_necrosis_outside=False):
     colonies = find_colonies(mask, size_cutoff, circ_cutoff)
     necrosis = find_necrosis(mask)
-    
     data = []
-    
+
     for colony in colonies:
         colony_area = cv2.contourArea(colony)
         centroid = compute_centroid(colony)
         if colony_area <= 50:
             continue
-        mask = np.zeros(img.shape, np.uint8)
-        cv2.drawContours(mask, [colony], -1, 255, cv2.FILLED)
-        pix = img[mask == 255]
-        # Check if any necrosis contour is inside the colony
+
+        mask2 = np.zeros(img.shape, np.uint8)
+        cv2.drawContours(mask2, [colony], -1, 255, cv2.FILLED)
+        pix = img[mask2 == 255]
+
         necrosis_area = 0
-        nec_list =[]
+        nec_list = []
+
         for nec in necrosis:
-            # Check if the first point of the necrosis contour is inside the colony
             if contours_overlap_using_mask(colony, nec):
                 nec_area = cv2.contourArea(nec)
                 necrosis_area += nec_area
@@ -239,16 +269,30 @@ def analyze_colonies(mask, size_cutoff, circ_cutoff, img):
             "organoid_area": colony_area,
             "necrotic_area": necrosis_area,
             "centroid": centroid,
-            "percent_necrotic": necrosis_area/colony_area,
+            "percent_necrotic": necrosis_area / colony_area,
             "contour": colony,
             "nec_contours": nec_list,
-            'mean_pixel_value':np.mean(pix)
+            "mean_pixel_value": np.mean(pix)
         })
 
-    # Convert results to a DataFrame
     df = pd.DataFrame(data)
-    df.index = range(1,len(df.index)+1)
-    return(df)
+    df.index = range(1, len(df.index) + 1)
+
+    outside_necrosis_area = 0
+    outside_necrosis_contours = []
+
+    if find_necrosis_outside:
+        for nec in necrosis:
+            overlaps_any = False
+            for colony in colonies:
+                if contours_overlap_using_mask(colony, nec):
+                    overlaps_any = True
+                    break
+            if not overlaps_any:
+                outside_necrosis_area += cv2.contourArea(nec)
+                outside_necrosis_contours.append(nec)
+
+    return df, outside_necrosis_area, outside_necrosis_contours
 
 import torch    
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  
@@ -258,24 +302,30 @@ def main(args):
     min_size = args[2]
     min_circ = args[3]
     do_necrosis = args[5]
+    find_necrosis_outside = args[7] if len(args) > 7 else False
     print('passed do necrosis: ' + str(do_necrosis))
+
     colonies = {}
     img_map, i_num, j_num = cut_img(path, file)
     from transformers import SegformerForSemanticSegmentation
-    # Load fine-tuned model
-    model = SegformerForSemanticSegmentation.from_pretrained(args[6])  # Adjust path
+
+    model = SegformerForSemanticSegmentation.from_pretrained(args[6])
     model.to(device)
-    model.eval()  # Set to evaluation mode
+    model.eval()
+
     for z in img_map:
         mask = eval_img(img_map[z], model)
         cv2.imwrite(img_map[z], mask)
-    del mask,z
+        del mask, z
+
     p = stitch(img_map, i_num, j_num)
-    colonies = analyze_colonies(p, min_size, min_circ, cv2.imread(path + file))
+    colonies, outside_necrosis_area, outside_necrosis_contours = analyze_colonies(
+        p, min_size, min_circ, cv2.imread(os.path.join(path, file)), find_necrosis_outside
+    )
     if len(colonies) <=0:
     	caption = np.ones((150, 2048, 3), dtype=np.uint8) * 255  # Multiply by 255 to make it white
     	cv2.putText(caption, 'No organoids detected.', (40, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 3)
-    	img = pad(cv2.imread(path + file))
+    	img = pad(cv2.imread(os.path.join(path, file)))
     	file = file.split('.')[0]
     	cv2.imwrite(path+file+'_result.png', np.vstack((img, caption)))
     	if do_necrosis:
@@ -287,7 +337,7 @@ def main(args):
     	   colonies = pd.DataFrame(colonies)
     	   return(np.vstack((img, caption)), colonies)
     
-    img = pad(cv2.imread(path + file))
+    img = pad(cv2.imread(os.path.join(path, file)))
     img = cv2.copyMakeBorder(img,top=0, bottom=10,left=0,right=10, borderType=cv2.BORDER_CONSTANT,  value=[255, 255, 255]) 
     
     
@@ -299,11 +349,14 @@ def main(args):
         cv2.drawContours(img, [list(colonies["contour"])[i]], -1, (0, 255, 0), 2)
         if do_necrosis == True:
             cv2.drawContours(img, list(colonies['nec_contours'])[i], -1, (0, 0, 255), 2)
+        
         coords = list(list(colonies["centroid"])[i])
         if coords[0] > 1950:
             #if a colony is too close to the right edge, makes the label move to left
             coords[0] = 1950
         cv2.putText(img, str(colonies.index[i]), tuple(coords), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 0), 2)
+    if do_necrosis and find_necrosis_outside and len(outside_necrosis_contours) > 0:
+        cv2.drawContours(img, outside_necrosis_contours, -1, (255, 0, 255), 2)
     img = cv2.copyMakeBorder(img,top=10, bottom=0,left=10,right=0, borderType=cv2.BORDER_CONSTANT,  value=[255, 255, 255]) 
     colonies["circularity"]=[4*np.pi/((cv2.arcLength(cnt, True))**2) for cnt in list(colonies['contour'])]
     colonies["circularity"]=colonies["circularity"]*colonies["organoid_area"]
@@ -311,9 +364,10 @@ def main(args):
     colonies = colonies.drop('nec_contours', axis=1)
     
     colonies.insert(loc=0, column="organoid_number", value=[str(x) for x in range(1, len(colonies)+1)])
-    total_area_dark = sum(colonies['necrotic_area'])
+    total_area_dark_inside = sum(colonies['necrotic_area'])
+    total_area_dark_outside = outside_necrosis_area if (do_necrosis and find_necrosis_outside) else 0
     total_area_light = sum(colonies['organoid_area'])
-    ratio = total_area_dark/(abs(total_area_light)+1)
+    ratio = total_area_dark_inside / (abs(total_area_light) + 1)
     radii = [np.sqrt(x/3.1415) for x in list(colonies['organoid_area'])]
     volumes = [4.189*(x**3) for x in radii]
     colonies['organoid_volume'] = volumes
@@ -326,7 +380,7 @@ def main(args):
     "organoid_area": total_area_light,
     "mean_pixel_value": meanpix,
     "centroid": None,
-    "necrotic_area": total_area_dark,
+    "necrotic_area": total_area_dark_inside,
     "percent_necrotic": ratio,
     "circularity": colonies["circularity"].mean()
     }
@@ -335,14 +389,23 @@ def main(args):
     if do_necrosis == False:
         colonies = colonies.drop('necrotic_area', axis=1)
         colonies = colonies.drop('percent_necrotic', axis=1)
+    else:
+        if find_necrosis_outside:
+            colonies["outside_necrotic_area"] = 0
+            colonies.loc[len(colonies), "outside_necrotic_area"] = total_area_dark_outside
     Parameters = pd.DataFrame({"Minimum organoid size in pixels":[min_size], "Minimum organoid circularity":[min_circ]})
     file = file.split('.')[0]
     with pd.ExcelWriter(path+file+'.xlsx') as writer:
         colonies.to_excel(writer, sheet_name="Organoid data", index=False)
         Parameters.to_excel(writer, sheet_name="Parameters", index=False)
+        build_organoid_column_descriptions(find_necrosis_outside).to_excel(
+        writer,
+        sheet_name="Parameters",
+        index=False,
+        startrow=len(Parameters) + 3)
     caption = np.ones((150, 2068, 3), dtype=np.uint8) * 255  # Multiply by 255 to make it white
     if do_necrosis == True:
-        cv2.putText(caption, "Total area necrotic: "+str(total_area_dark)+ ", Total area living: "+str(total_area_light)+", Ratio: "+str(ratio), (40, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 3)
+        cv2.putText(caption, "Total area necrotic inside organoids: "+str(total_area_dark_inside)+ ", Total area living: "+str(total_area_light)+", Ratio: "+str(ratio), (40, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 3)
     else:
         cv2.putText(caption, "Total area: "+str(total_area_light), (40, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 3)
     cv2.putText(caption, "Total number of organoids: "+str(len(colonies)-1), (40, 110), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 3)

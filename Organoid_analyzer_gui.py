@@ -13,9 +13,41 @@ This is the Tkinter GUI for Mari's image analysis program
 import tkinter as tk
 import os
 import sys
-def find_tiff_files(path):
+import pandas as pd
+
+def build_summary_column_descriptions(outside=False):
+    temp= pd.DataFrame({
+        "Column": [
+            "image",
+            "Number of organoids",
+            "organoid_volume",
+            "organoid_area",
+            "mean_pixel_value",
+            "circularity",
+            "necrotic_area",
+            "percent_necrotic",
+            "outside_necrotic_area"
+        ],
+        "Meaning": [
+            "path to image file analyzed",
+            "number of organoids in this image file",
+            "total volume (estimated with sphere formula) of organoids in this file",
+            "total pixel area of organoids in this file",
+            "mean pixel value (brightness, 0 is dark, 255 is light) of organoids in this file",
+            "mean organoid circularity in this file, (4*pi*area)/(perimeter^2)",
+            "total area in pixels of necrosis within organoids in this file",
+            "necrotic area / organoid_area",
+            "total area in pixels of necrotic regions outside organoids, in this file"
+        ]
+    })
+    if outside==True:
+        return(temp)
+    else:
+        return(temp.head(8))
+
+def find_image_files(path):
     """
-    Recursively returns full paths to all .tif and .tiff files under 'path',
+    Recursively returns full paths to all supported image files under 'path',
     excluding generated result files and temporary tile files.
     """
     final = []
@@ -28,13 +60,31 @@ def find_tiff_files(path):
     for entry in entries:
         full = os.path.join(path, entry)
         if os.path.isdir(full):
-            final += find_tiff_files(full)
+            final += find_image_files(full)
         elif os.path.isfile(full):
             name = entry.lower()
-            if (name.endswith('.tif') or name.endswith('.tiff')) and ('result' not in name) and ('_part' not in name):
+            if (
+                (name.endswith('.tif') or name.endswith('.tiff') or
+                 name.endswith('.png') or name.endswith('.jpg') or name.endswith('.jpeg'))
+                and ('result' not in name)
+                and ('_part' not in name)
+            ):
                 final.append(full)
     return final
 
+pending_path_update = None
+
+def delayed_on_entry_change(*args):
+    global pending_path_update
+    if pending_path_update is not None:
+        root.after_cancel(pending_path_update)
+    pending_path_update = root.after(2000, run_path_update)
+
+def run_path_update():
+    global pending_path_update
+    pending_path_update = None
+    on_entry_change()
+    
 def find_models(path):
     """
     Recursively returns a list of all huggingface models (at any depth) under 'path' 
@@ -79,6 +129,7 @@ def find_directories(path):
 
     # Check if current directory contains any tiff files
     tiff_files = [f for f in entries if os.path.isfile(os.path.join(path, f)) and (f.lower().endswith('.tif') or f.lower().endswith('.tiff'))]
+    
     png_files = [f for f in entries if os.path.isfile(os.path.join(path, f)) and (f.lower().endswith('.png')) and not ('result' in f)]
     jpg_files = [f for f in entries if os.path.isfile(os.path.join(path, f)) and (f.lower().endswith('.jpg') or f.lower().endswith('.jpeg'))]
     if len(tiff_files+png_files+jpg_files) > 0:
@@ -276,7 +327,7 @@ config = read_config(script_path)
 entry_path_txt = tk.StringVar(value=config[2])
 entry_path = tk.Entry(root, width=30, textvariable=entry_path_txt)
 entry_path.grid(row=3, column=1, padx=10, pady=5)
-entry_path_txt.trace_add("write", on_entry_change)
+entry_path_txt.trace_add("write", delayed_on_entry_change)
 
 label_size_min = tk.Label(root, text="Organoid size minimum cutoff:")
 label_size_min.grid(row=0, column=0, padx=10, pady=5, sticky="w")
@@ -300,6 +351,34 @@ modelpath = config[3]
 do_necrosis = tk.BooleanVar(value=checkbool(config[4]))
 checkbox_necrosis= tk.Checkbutton(root, text='Analyze necrotic areas',variable=do_necrosis, onvalue=True, offvalue=False)
 checkbox_necrosis.grid(row=0, column=2, padx=10, pady=5, sticky="w")
+HoverText(checkbox_necrosis, "Detect necrotic regions inside organoids and report necrotic_area and percent_necrotic.")
+find_necrosis_outside = tk.BooleanVar(value=False)
+checkbox_necrosis_outside = None
+
+def update_necrosis_checkbox(*args):
+    global checkbox_necrosis_outside
+
+    if do_necrosis.get():
+        if checkbox_necrosis_outside is None:
+            checkbox_necrosis_outside = tk.Checkbutton(
+                root,
+                text='Find necrosis outside organoids',
+                variable=find_necrosis_outside,
+                onvalue=True,
+                offvalue=False
+            )
+            checkbox_necrosis_outside.grid(row=1, column=2, padx=10, pady=5, sticky="w")
+            HoverText(checkbox_necrosis_outside,"Also detect necrotic regions outside organoids and report them separately as outside_necrotic_area. Currently does not work with z-stack analyses.")
+        else:
+            checkbox_necrosis_outside.grid(row=1, column=2, padx=10, pady=5, sticky="w")
+            HoverText(checkbox_necrosis_outside,"Also detect necrotic regions outside organoids and report them separately as outside_necrotic_area. Currently does not work with z-stack analyses.")
+    else:
+        find_necrosis_outside.set(False)
+        if checkbox_necrosis_outside is not None:
+            checkbox_necrosis_outside.grid_forget()
+
+do_necrosis.trace_add("write", update_necrosis_checkbox)
+update_necrosis_checkbox()
 model_options = find_models(script_path)
 label_modelpath = tk.Label(root, text="Select model:")
 label_modelpath.grid(row=2, column=2, padx=10, pady=5, sticky="w")
@@ -309,38 +388,58 @@ dropdown_models = tk.OptionMenu(root, modelpathvar, *model_options)
 dropdown_models.grid(row=2, column=3, padx=10, pady=5, sticky="w")
 label_hidden = tk.Label(root, text="")
 label_hidden.grid(row=5, column=0, padx=10, pady=5, sticky="w")
-import pandas as pd
 def run_analysis(filn, path, filelist = [], params = [0,0, False, ""], do_all = False, multiple_folders = False):
     sys.path.append(script_path)
     label_hidden.config(text="Initiated analysis.")
-    if multiple_folders == True:
-        all_files = find_tiff_files(path)
+    if (multiple_folders == True) and (group_analysis.get() == True):
+        directories = find_directories(path)
     
-        if len(all_files) < 1:
-            label_hidden.config(text="No tif files detected.")
+        if len(directories) < 1:
+            label_hidden.config(text="No folders with tif files detected.")
             return 0
     
-        label_hidden.config(text='Detected the following tif files:\n' + '\n'.join(all_files[:20]))
+        label_hidden.config(text='Detected the following folders:\n' + '\n'.join(directories[:20]))
         results = None
     
-        for count, fullpath in enumerate(all_files, start=1):
-            folder = os.path.dirname(fullpath)
+        for count, folder in enumerate(sorted(directories), start=1):
             if folder[-1] != '/':
                 folder = folder + '/'
-            fname = os.path.basename(fullpath)
+    
+            folder_files = sorted([
+                f for f in os.listdir(folder)
+                if os.path.isfile(os.path.join(folder, f))
+                and (f.lower().endswith('.tif') or f.lower().endswith('.tiff'))
+                and ('result' not in f.lower())
+                and ('_part' not in f.lower())
+            ])
+    
+            if len(folder_files) < 1:
+                continue
     
             try:
-                result = run_analysis(fname, folder, [fname], params, True, False)
-                label_hidden.config(text=f"Finished {count} out of {len(all_files)} files.")
-                root.update()
+                if group_analysis.get():
+                    result = run_analysis("", folder, folder_files, params, True, False)
+                else:
+                    for fname in folder_files:
+                        temp = run_analysis(fname, folder, [fname], params, False, False)
+                        if results is None:
+                            results = temp
+                        else:
+                            results = pd.concat([results, temp])
+                    label_hidden.config(text=f"Finished {count} out of {len(directories)} folders.")
+                    root.update()
+                    continue
     
                 if results is None:
                     results = result
                 else:
                     results = pd.concat([results, result])
     
+                label_hidden.config(text=f"Finished {count} out of {len(directories)} folders.")
+                root.update()
+    
             except Exception as e:
-                print(f"Error analyzing {fullpath}: {e}")
+                print(f"Error analyzing {folder}: {e}")
     
         Parameters = pd.DataFrame({
             "Minimum organoid size in pixels": [params[0]],
@@ -351,14 +450,64 @@ def run_analysis(filn, path, filelist = [], params = [0,0, False, ""], do_all = 
         with pd.ExcelWriter(path + 'summary.xlsx') as writer:
             results.to_excel(writer, sheet_name="Organoid data", index=False)
             Parameters.to_excel(writer, sheet_name="Parameters", index=False)
+            build_summary_column_descriptions(params[4]).to_excel(
+                writer,
+                sheet_name="Parameters",
+                index=False,
+                startrow=len(Parameters) + 3
+            )
     
-        return 0       
-            
+        return 0
+    elif (multiple_folders == True) and (group_analysis.get() != True):
+            all_files = find_image_files(path)
+        
+            if len(all_files) < 1:
+                label_hidden.config(text="No tif files detected.")
+                return 0
+        
+            label_hidden.config(text='Detected the following tif files:\n' + '\n'.join(all_files[:20]))
+            results = None
+        
+            for count, fullpath in enumerate(all_files, start=1):
+                folder = os.path.dirname(fullpath)
+                if folder[-1] != '/':
+                    folder = folder + '/'
+                fname = os.path.basename(fullpath)
+        
+                try:
+                    result = run_analysis(fname, folder, [fname], params, True, False)
+                    label_hidden.config(text=f"Finished {count} out of {len(all_files)} files.")
+                    root.update()
+        
+                    if results is None:
+                        results = result
+                    else:
+                        results = pd.concat([results, result])
+        
+                except Exception as e:
+                    print(f"Error analyzing {fullpath}: {e}")
+        
+            Parameters = pd.DataFrame({
+                "Minimum organoid size in pixels": [params[0]],
+                "Minimum organoid circularity": [params[1]],
+                "Model": [params[3]]
+            })
+        
+            with pd.ExcelWriter(path + 'summary.xlsx') as writer:
+                results.to_excel(writer, sheet_name="Organoid data", index=False)
+                Parameters.to_excel(writer, sheet_name="Parameters", index=False)
+                build_summary_column_descriptions(params[4]).to_excel(
+                    writer,
+                    sheet_name="Parameters",
+                    index=False,
+                    startrow=len(Parameters) + 3
+                )
+            return 0
     if do_all == False:
         import Organoid_analyzer_AI as MA
         from PIL import Image, ImageTk
         import cv2
-        img,result = MA.main([path, filn, params[0], params[1], script_path, params[2], params[3]])
+        img,result = MA.main([path, filn, params[0], params[1], script_path, params[2], params[3], params[4]])
         cv_image_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         del img
         # Convert numpy array to PIL Image
@@ -378,7 +527,7 @@ def run_analysis(filn, path, filelist = [], params = [0,0, False, ""], do_all = 
         import Organoid_analyzer_Zstack as MA
         from PIL import Image, ImageTk
         import cv2
-        img,result = MA.main([path, filelist, params[0], params[1], script_path, params[2], int(config[5]), float(config[6]),params[3]])
+        img,result = MA.main([path, filelist, params[0], params[1], script_path, params[2], int(config[5]), float(config[6]), params[3], params[4]])
         result.insert(loc=0, column="image", value=path)
         cv_image_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         del img
@@ -402,7 +551,7 @@ def run_analysis(filn, path, filelist = [], params = [0,0, False, ""], do_all = 
         import cv2
         results = None
         for x in filelist:
-            img,result = MA.main([path, x, params[0], params[1], script_path, params[2], params[3]])
+            img,result = MA.main([path, x, params[0], params[1], script_path, params[2], params[3], params[4]])
             result.insert(loc=0, column="image", value=path+x)
             cv_image_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             del img
@@ -427,8 +576,8 @@ def run_analysis(filn, path, filelist = [], params = [0,0, False, ""], do_all = 
         if multiple_groups.get() == False:
             Parameters = pd.DataFrame({"Minimum organoid size in pixels":[params[0]], "Minimum organoid circularity":[params[1]], 'Model':[params[3]]})
             with pd.ExcelWriter(path+'summary.xlsx') as writer:
-            	results.to_excel(writer, sheet_name="Organoid data", index=False)
-            	Parameters.to_excel(writer, sheet_name="Parameters", index=False)
+                	results.to_excel(writer, sheet_name="Organoid data", index=False)
+                	Parameters.to_excel(writer, sheet_name="Parameters", index=False)
         else:
             return(results)           
     label_hidden.config(text="Finished analysis.")
@@ -443,7 +592,7 @@ def click_conf():
         label_hidden.config(text="")
         filename = file_chosen.get()
         #print(modelpathvar.get())
-        run_analysis(filename, entry_path.get(), file_list, [int(entry_size_min.get()),float(entry_circularity.get()), do_necrosis.get(), modelpathvar.get()], checkbox_var.get(), multiple_groups.get())
+        run_analysis(filename,entry_path.get(),file_list,[int(entry_size_min.get()),float(entry_circularity.get()),do_necrosis.get(),modelpathvar.get(),find_necrosis_outside.get()],checkbox_var.get(),multiple_groups.get())
     else:
         label_hidden.config(text="Please fix input.")
 
