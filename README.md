@@ -61,4 +61,5 @@ This is what the working UI looks like.
 
 # Changelog:
 7/13/2026-more bugfixes and now there is an option to find necrosis outside organoids
+
 6/24/2026-fixed bug so that do multiple files should really find all tif files
